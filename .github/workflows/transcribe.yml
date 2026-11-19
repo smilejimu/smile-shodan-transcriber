@@ -1,0 +1,66 @@
+name: transcribe
+on:
+  schedule:
+    - cron: "17 0-12 * * *"   # 日本時間 9:17〜21:17 に毎時
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: transcribe
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      APPS_URL: ${{ secrets.APPS_URL }}
+      INGEST_KEY: ${{ secrets.INGEST_KEY }}
+      MODEL_DIR: models/sherpa-onnx-whisper-turbo
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for new recordings
+        id: check
+        run: |
+          n=$(LIST_ONLY=1 python3 transcribe.py | sed -n 's/^new recordings: //p')
+          echo "count=${n:-0}" >> "$GITHUB_OUTPUT"
+          echo "new recordings: ${n:-0}"
+
+      - name: Restore model cache
+        if: steps.check.outputs.count != '0'
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: whisper-turbo-v1
+
+      - name: Prepare speech model
+        if: steps.check.outputs.count != '0'
+        run: |
+          pip install -q sherpa-onnx soundfile numpy
+          if [ ! -f "$MODEL_DIR/turbo-encoder.int8.onnx" ]; then
+            mkdir -p models
+            curl -sSL -o turbo.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-turbo.tar.bz2
+            tar xjf turbo.tar.bz2 -C models
+            rm -f turbo.tar.bz2 models/sherpa-onnx-whisper-turbo/turbo-encoder.onnx models/sherpa-onnx-whisper-turbo/turbo-decoder.onnx
+            rm -rf models/sherpa-onnx-whisper-turbo/test_wavs
+          fi
+
+      - name: Transcribe and register
+        if: steps.check.outputs.count != '0'
+        run: python3 transcribe.py
+
+      # 公開リポジトリは60日動きがないと定期実行が止まるため、月に1回だけ空の記録を残す
+      - name: Keep schedule alive
+        if: github.event_name == 'schedule'
+        run: |
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          if [ $((now - last)) -gt 2592000 ]; then
+            git config user.name "github-actions"
+            git config user.email "github-actions@users.noreply.github.com"
+            git commit --allow-empty -m "keep schedule alive"
+            git push
+          fi
