@@ -14,7 +14,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 120
     env:
       APPS_URL: ${{ secrets.APPS_URL }}
       INGEST_KEY: ${{ secrets.INGEST_KEY }}
